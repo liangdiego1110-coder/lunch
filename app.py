@@ -3,26 +3,36 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import random
 
-st.set_page_config(page_title="雲端午餐抽獎機", page_icon="🍽️")
+# 網頁基礎設定
+st.set_page_config(page_title="午餐抽獎機", layout="centered")
 
-# 建立 Google Sheets 連線
+# 1. 建立 Google Sheets 連線
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# --- 核心資料處理函式 ---
 def get_data():
-    df = conn.read(spreadsheet=st.secrets["spreadsheet_url"], ttl="0")
-    df = df.dropna(how='all')
-    data_dict = {}
-    for _, row in df.iterrows():
-        cat = str(row['category']).strip()
-        food = str(row['food']).strip()
-        if cat not in data_dict: data_dict[cat] = []
-        if food and food != "nan": data_dict[cat].append(food)
-    return data_dict if data_dict else {"預設清單": []}
+    """從雲端讀取資料並轉為字典格式"""
+    try:
+        df = conn.read(spreadsheet=st.secrets["spreadsheet_url"], ttl="0")
+        df = df.dropna(how='all')
+        data_dict = {}
+        for _, row in df.iterrows():
+            cat = str(row['category']).strip()
+            food = str(row['food']).strip()
+            if cat not in data_dict:
+                data_dict[cat] = []
+            if food and food != "nan" and food != "":
+                data_dict[cat].append(food)
+        return data_dict if data_dict else {"預設清單": []}
+    except Exception:
+        return {"預設清單": []}
 
 def save_to_sheets(data_dict):
+    """將目前的字典資料同步回雲端試算表"""
     rows = []
     for cat, foods in data_dict.items():
         if not foods:
+            # 即使沒有食物也保留分類，放一個空值
             rows.append({"category": cat, "food": ""})
         else:
             for f in foods:
@@ -30,88 +40,98 @@ def save_to_sheets(data_dict):
     new_df = pd.DataFrame(rows)
     conn.update(spreadsheet=st.secrets["spreadsheet_url"], data=new_df)
 
+# 2. 初始化資料 (存於 session_state 避免重複讀取)
 if 'food_lists' not in st.session_state:
     st.session_state.food_lists = get_data()
 
-st.title("🍽️ 雲端午餐抽獎機")
+st.title("午餐抽獎機")
+st.write("資料已與雲端同步")
 
-# --- ⚙️ 分類管理區 ---
-with st.expander("⚙️ 管理清單分類"):
+# --- 區段一：管理清單分類 ---
+with st.expander("管理清單分類 (新增/改名/刪除)"):
+    # A. 新增分類
     st.subheader("新增分類")
-    new_cat_col1, new_cat_col2 = st.columns([3, 1])
-    with new_cat_col1:
-        new_cat = st.text_input("名稱：", label_visibility="collapsed", key="new_cat_input")
-    with new_cat_col2:
-        if st.button("➕ 建立", use_container_width=True):
-            if new_cat.strip() and new_cat not in st.session_state.food_lists:
-                st.session_state.food_lists[new_cat] = []
-                save_to_sheets(st.session_state.food_lists)
-                st.rerun()
-                
-    st.divider()
-    
-    st.subheader("刪除分類")
-    del_cat_col1, del_cat_col2 = st.columns([3, 1])
-    with del_cat_col1:
-        del_target = st.selectbox("選擇要刪除的分類：", list(st.session_state.food_lists.keys()), label_visibility="collapsed")
-    with del_cat_col2:
-        if st.button("🗑️ 刪除", use_container_width=True):
-            if len(st.session_state.food_lists) > 1:
-                del st.session_state.food_lists[del_target]
-                save_to_sheets(st.session_state.food_lists)
-                st.rerun()
-            else:
-                st.error("至少要留一個分類喔！")
+    new_cat_name = st.text_input("輸入新分類名稱：", key="input_new_cat")
+    if st.button("建立新分類"):
+        if new_cat_name.strip() and new_cat_name not in st.session_state.food_lists:
+            st.session_state.food_lists[new_cat_name] = []
+            save_to_sheets(st.session_state.food_lists)
+            st.rerun()
 
-# --- 📍 主畫面選擇區 ---
+    st.divider()
+
+    # B. 修改與刪除目前分類
+    st.subheader("修改目前分類")
+    all_cats = list(st.session_state.food_lists.keys())
+    target_cat = st.selectbox("選擇要管理的分類：", all_cats, key="select_manage_cat")
+    
+    # 改名
+    rename_val = st.text_input("重新命名為：", value=target_cat, key="rename_input")
+    if st.button("儲存新名稱"):
+        new_name = rename_val.strip()
+        if new_name and new_name != target_cat:
+            st.session_state.food_lists[new_name] = st.session_state.food_lists.pop(target_cat)
+            save_to_sheets(st.session_state.food_lists)
+            st.rerun()
+            
+    # 刪除整個分類
+    if st.button(f"刪除整個 {target_cat} 分類", type="secondary"):
+        if len(st.session_state.food_lists) > 1:
+            del st.session_state.food_lists[target_cat]
+            save_to_sheets(st.session_state.food_lists)
+            st.rerun()
+        else:
+            st.error("至少需要保留一個分類")
+
+st.divider()
+
+# --- 區段二：主要抽獎與食物管理 ---
 places = list(st.session_state.food_lists.keys())
-current_place = st.selectbox("📍 請選擇地點：", places)
+current_place = st.selectbox("選擇目前地點：", places)
 current_list = st.session_state.food_lists.get(current_place, [])
 
-# --- 📝 新增食物區 ---
-col1, col2 = st.columns([3, 1])
-with col1:
-    new_food = st.text_input("新增食物：", label_visibility="collapsed", placeholder="想吃什麼？")
-with col2:
-    if st.button("➕ 加入", use_container_width=True):
+# 新增食物
+st.subheader("新增食物")
+f_col1, f_col2 = st.columns([3, 1])
+with f_col1:
+    new_food = st.text_input("輸入食物名稱：", label_visibility="collapsed", placeholder="例如：牛肉麵", key="input_new_food")
+with f_col2:
+    if st.button("加入", use_container_width=True):
         if new_food.strip():
             st.session_state.food_lists[current_place].append(new_food.strip())
             save_to_sheets(st.session_state.food_lists)
             st.rerun()
 
-st.divider()
-
-# --- 📋 食物清單與單筆刪除 ---
-st.markdown("### 📋 目前清單內容")
+# 顯示清單與單筆刪除
+st.subheader("目前清單內容")
 if not current_list:
-    st.warning("這個分類還沒有食物，快加一點吧！")
+    st.write("目前沒有食物")
 else:
-    # 建立多欄位來顯示食物和對應的刪除按鈕
-    for food in current_list:
-        col_text, col_btn = st.columns([4, 1])
-        with col_text:
-            st.write(f"• {food}")
-        with col_btn:
-            # 每個食物旁邊都有一個專屬的刪除按鈕
-            if st.button("❌", key=f"del_{current_place}_{food}"):
-                st.session_state.food_lists[current_place].remove(food)
+    for i, food in enumerate(current_list):
+        row_col1, row_col2 = st.columns([4, 1])
+        with row_col1:
+            st.write(f"{i+1}. {food}")
+        with row_col2:
+            # 使用索引 i 確保 key 唯一
+            if st.button("刪除", key=f"btn_del_{current_place}_{i}", use_container_width=True):
+                st.session_state.food_lists[current_place].pop(i)
                 save_to_sheets(st.session_state.food_lists)
                 st.rerun()
 
 st.divider()
 
-# --- 🎲 抽獎區 ---
-if st.button("🎲 抽出午餐！", type="primary", use_container_width=True):
+# --- 區段三：抽獎按鈕 ---
+if st.button("開始抽獎", type="primary", use_container_width=True):
     if current_list:
         winner = random.choice(current_list)
-        st.success(f"✨ 決定是你了：【 {winner} 】！")
+        st.subheader(f"抽獎結果：{winner}")
         st.balloons()
     else:
-        st.error("清單是空的，抽不出來啦！")
+        st.error("清單中沒有食物可以抽獎")
 
-# 加上一鍵清空整個分類食物的功能 (選用)
-with st.expander("危險操作區"):
-    if st.button("🗑️ 清空此分類所有食物", type="primary"):
-        st.session_state.food_lists[current_place].clear()
+# 危險操作：清空該分類所有食物
+with st.expander("進階操作"):
+    if st.button("清空此分類所有食物"):
+        st.session_state.food_lists[current_place] = []
         save_to_sheets(st.session_state.food_lists)
         st.rerun()
