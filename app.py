@@ -20,8 +20,27 @@ if 'food_lists' not in st.session_state:
 places = list(st.session_state.food_lists.keys())
 current_place = st.selectbox("📍 選擇地點清單：", places)
 
-# 顯示目前清單
-current_list = st.session_state.food_lists[current_place]
+# --- ✨ 新增的：更改清單名稱功能 ✨ ---
+with st.expander("✏️ 更改目前清單名稱"):
+    col_rename1, col_rename2 = st.columns([3, 1])
+    with col_rename1:
+        # 預設顯示目前的名稱
+        new_list_name = st.text_input("輸入新名稱：", value=current_place, label_visibility="collapsed")
+    with col_rename2:
+        if st.button("💾 儲存名稱", use_container_width=True):
+            new_list_name = new_list_name.strip()
+            if new_list_name and new_list_name != current_place:
+                if new_list_name in st.session_state.food_lists:
+                    st.error("⚠️ 這個清單名稱已經存在囉！")
+                else:
+                    # 將舊清單的食物轉移給新名稱，並刪除舊名稱
+                    st.session_state.food_lists[new_list_name] = st.session_state.food_lists.pop(current_place)
+                    st.rerun() # 重新整理網頁套用新名稱
+# -----------------------------------
+
+# 顯示目前清單內容
+# 使用 get 避免重新整理時的短暫錯誤
+current_list = st.session_state.food_lists.get(current_place, []) 
 if current_list:
     st.info(f"**目前清單：** {', '.join(current_list)}")
 else:
@@ -53,6 +72,6 @@ with col_draw:
             st.error("沒有食物可以抽啦！")
 
 with col_clear:
-    if st.button("🗑️ 清空目前清單", use_container_width=True):
+    if st.button("🗑️ 清空目前食物", use_container_width=True):
         st.session_state.food_lists[current_place].clear()
         st.rerun()
